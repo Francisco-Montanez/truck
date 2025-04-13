@@ -8,20 +8,33 @@ use handles::FixedVertexHandle;
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 
+/// Import parallel iterator traits when not targeting wasm32
 #[cfg(not(target_arch = "wasm32"))]
-use rayon::prelude::*;
+pub use rayon::prelude::*;
 
-type SPoint2 = spade::Point2<f64>;
-type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
-type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
-type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+/// 2D point type used by the spade triangulation library
+pub type SPoint2 = spade::Point2<f64>;
 
-pub(super) trait SP<S>:
+/// Constrained Delaunay triangulation type using SPoint2
+pub type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
+
+/// A shell with polyline curves and optional polygon mesh faces
+pub type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
+
+/// A compressed shell with polyline curves and optional polygon mesh faces
+pub type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+
+/// Surface parameter search trait for finding (u,v) parameters given a 3D point
+pub trait SP<S>:
     Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable {
 }
 impl<S, F> SP<S> for F where F: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable {}
 
-pub(super) fn by_search_parameter<S>(
+/// Search for surface parameters using basic parameter search
+/// 
+/// Attempts to find (u,v) parameters on the surface corresponding to the given 3D point.
+/// First tries with the provided hint, then without if that fails.
+pub fn by_search_parameter<S>(
     surface: &S,
     point: Point3,
     hint: Option<(f64, f64)>,
@@ -34,7 +47,11 @@ where
         .or_else(|| surface.search_parameter(point, None, 100))
 }
 
-pub(super) fn by_search_nearest_parameter<S>(
+/// Search for surface parameters using robust nearest point search
+///
+/// Like by_search_parameter but also tries nearest point search if regular parameter
+/// search fails. This is more robust but potentially slower.
+pub fn by_search_nearest_parameter<S>(
     surface: &S,
     point: Point3,
     hint: Option<(f64, f64)>,
@@ -51,7 +68,7 @@ where
 
 /// Tessellates faces
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn shell_tessellation<'a, C, S>(
+pub fn shell_tessellation<'a, C, S>(
     shell: &Shell<Point3, C, S>,
     tol: f64,
     sp: impl SP<S>,
@@ -97,7 +114,7 @@ where
 
 /// Tessellates faces
 #[cfg(any(target_arch = "wasm32", test))]
-pub(super) fn shell_tessellation_single_thread<'a, C, S>(
+pub fn shell_tessellation_single_thread<'a, C, S>(
     shell: &'a Shell<Point3, C, S>,
     tol: f64,
     sp: impl SP<S>,
@@ -146,7 +163,7 @@ where
 }
 
 /// Tessellates faces
-pub(super) fn cshell_tessellation<'a, C, S>(
+pub fn cshell_tessellation<'a, C, S>(
     shell: &CompressedShell<Point3, C, S>,
     tol: f64,
     sp: impl SP<S>,
@@ -200,7 +217,8 @@ where
     }
 }
 
-fn shell_create_polygon<S: PreMeshableSurface>(
+/// Creates a polygon from a vector of wires and a surface
+pub fn shell_create_polygon<S: PreMeshableSurface>(
     surface: &S,
     wires: Vec<Wire<Point3, PolylineCurve>>,
     orientation: bool,
@@ -225,23 +243,27 @@ fn shell_create_polygon<S: PreMeshableSurface>(
     new_face
 }
 
+/// A point on a surface with associated (u,v) parameters
 #[derive(Clone, Copy, Debug, derive_more::Deref, derive_more::DerefMut)]
-struct SurfacePoint {
+pub struct SurfacePoint {
     point: Point3,
     #[deref]
     #[deref_mut]
     uv: Point2,
 }
 
+/// Convert a tuple of (Point2, Point3) to SurfacePoint
 impl From<(Point2, Point3)> for SurfacePoint {
     fn from((uv, point): (Point2, Point3)) -> Self { Self { point, uv } }
 }
 
+/// A piece of a polygon boundary defined by a vector of SurfacePoint
 #[derive(Debug, Default, Clone)]
-struct PolyBoundaryPiece(Vec<SurfacePoint>);
+pub struct PolyBoundaryPiece(Vec<SurfacePoint>);
 
 impl PolyBoundaryPiece {
-    fn try_new<S: PreMeshableSurface>(
+    /// Create a new PolyBoundaryPiece from a surface, wire, and parameter search function
+    pub fn try_new<S: PreMeshableSurface>(
         surface: &S,
         wire: impl Iterator<Item = PolylineCurve>,
         sp: impl SP<S>,
@@ -309,19 +331,24 @@ impl PolyBoundaryPiece {
     }
 }
 
-fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
+/// Get the absolute difference between a value and a reference value
+pub fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
     let f = move |x: &f64| f64::abs(x - previous);
     move |x: &f64, y: &f64| f(x).partial_cmp(&f(y)).unwrap()
 }
-fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
+
+/// Get the minimum difference between a value and a reference value
+pub fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
     let closure = |i| u + i as f64 * up;
     (-2..=2).map(closure).min_by(abs_diff(u0)).unwrap()
 }
 
+/// A boundary defined by a vector of vectors of SurfacePoint
 #[derive(Debug, Default, Clone)]
-struct PolyBoundary(Vec<Vec<SurfacePoint>>);
+pub struct PolyBoundary(Vec<Vec<SurfacePoint>>);
 
-fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64, f64)) {
+/// Normalize the range of a curve
+pub fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64, f64)) {
     let p = curve[0];
     let q = curve[curve.len() - 1];
     let tmp = f64::min(p[compidx], q[compidx]) + TOLERANCE;
@@ -345,7 +372,8 @@ fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64
     *curve = curve1;
 }
 
-fn loop_orientation(curve: &[SurfacePoint]) -> bool {
+/// Determine the orientation of a loop
+pub fn loop_orientation(curve: &[SurfacePoint]) -> bool {
     curve
         .iter()
         .circular_tuple_windows()
@@ -353,8 +381,10 @@ fn loop_orientation(curve: &[SurfacePoint]) -> bool {
         > 0.0
 }
 
+/// Create a new PolyBoundary from a vector of PolyBoundaryPiece
 impl PolyBoundary {
-    fn new(pieces: Vec<PolyBoundaryPiece>, surface: &impl PreMeshableSurface, tol: f64) -> Self {
+    /// Create a new PolyBoundary from a vector of PolyBoundaryPiece
+    pub fn new(pieces: Vec<PolyBoundaryPiece>, surface: &impl PreMeshableSurface, tol: f64) -> Self {
         let (mut closed, mut open) = (Vec::new(), Vec::new());
         pieces.into_iter().for_each(|PolyBoundaryPiece(mut vec)| {
             match vec[0].uv.distance(vec[vec.len() - 1].uv) < 1.0e-3 {
@@ -463,7 +493,7 @@ impl PolyBoundary {
     }
 
     /// whether `c` is included in the domain with boundary = `self`.
-    fn include(&self, c: Point2) -> bool {
+    pub fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
         let r = Vector2::new(f64::cos(t), f64::sin(t));
         self.0
@@ -491,7 +521,7 @@ impl PolyBoundary {
     }
 
     /// Inserts points and adds constraint into triangulation.
-    fn insert_to(
+    pub fn insert_to(
         &self,
         triangulation: &mut Cdt,
         boundary_map: &mut HashMap<FixedVertexHandle, Point3>,
@@ -541,7 +571,8 @@ impl PolyBoundary {
     }
 }
 
-fn spade_round(x: f64) -> f64 {
+/// Round a floating point number to zero if it's too small
+pub fn spade_round(x: f64) -> f64 {
     match f64::abs(x) < MIN_ALLOWED_VALUE {
         true => 0.0,
         false => x,
@@ -549,7 +580,7 @@ fn spade_round(x: f64) -> f64 {
 }
 
 /// Tessellates one surface trimmed by polyline.
-fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64) -> PolygonMesh
+pub fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64) -> PolygonMesh
 where S: PreMeshableSurface {
     let mut triangulation = Cdt::new();
     let mut boundary_map = HashMap::<FixedVertexHandle, Point3>::default();
@@ -567,7 +598,7 @@ where S: PreMeshableSurface {
 }
 
 /// Inserts parameter divisions into triangulation.
-fn insert_surface(
+pub fn insert_surface(
     triangulation: &mut Cdt,
     surface: impl PreMeshableSurface,
     polyline: &PolyBoundary,
@@ -617,7 +648,7 @@ fn insert_surface(
 }
 
 /// Converts triangulation into `PolygonMesh`.
-fn triangulation_into_polymesh<'a>(
+pub fn triangulation_into_polymesh<'a>(
     vertices: VertexIterator<'a, SPoint2, (), CdtEdge<()>, ()>,
     triangles: InnerFaceIterator<'a, SPoint2, (), CdtEdge<()>, ()>,
     surface: &impl ParametricSurface3D,
@@ -667,7 +698,8 @@ fn triangulation_into_polymesh<'a>(
     )
 }
 
-fn polyline_on_surface(
+/// Create a polyline on a surface from two SurfacePoint
+pub fn polyline_on_surface(
     surface: impl PreMeshableSurface,
     p: SurfacePoint,
     q: SurfacePoint,
