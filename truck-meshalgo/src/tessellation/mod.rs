@@ -2,15 +2,16 @@ use crate::*;
 use spade::{iterators::*, *};
 use truck_topology::{compress::*, *};
 
+///
 #[cfg(not(target_arch = "wasm32"))]
-mod parallelizable {
+pub mod parallelizable {
     /// Parallelizable by `rayon`.
     pub trait Parallelizable: Send + Sync {}
     impl<T: Send + Sync> Parallelizable for T {}
 }
 
 #[cfg(target_arch = "wasm32")]
-mod parallelizable {
+pub mod parallelizable {
     /// No parallelization in the case of wasm.
     pub trait Parallelizable {}
     impl<T> Parallelizable for T {}
@@ -357,4 +358,5 @@ impl<C: PolylineableCurve, S: RobustMeshableSurface> RobustMeshableShape
     }
 }
 
-mod triangulation;
+///
+pub mod triangulation;
